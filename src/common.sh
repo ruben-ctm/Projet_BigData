@@ -1,10 +1,12 @@
-
+#!/usr/bin/env bash
+# Variables communes aux scripts. Surchargeables par l'environnement.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUCKET="${BUCKET:-${KUBERNETES_NAMESPACE:?KUBERNETES_NAMESPACE manquant : lancer depuis un service Onyxia ou definir BUCKET}}"
 PREFIX="${PREFIX:-openflights}"
-
+# Commande AWS : profil Onyxia "default" s'il existe, sinon variables d'environnement AWS_* + endpoint.
+# AWS_CMD permet de surcharger la commande AWS.
 if [ -n "${AWS_CMD:-}" ]; then
   AWS="$AWS_CMD"
 elif aws configure list-profiles 2>/dev/null | grep -qx default; then
@@ -17,6 +19,9 @@ SRC_URL="${SRC_URL:-https://raw.githubusercontent.com/jpatokal/openflights/3b0e4
 RAW_DIR="$ROOT/data/raw"
 
 stamp() { echo "== $(date '+%F %T') | ${KUBERNETES_NAMESPACE:-$BUCKET} | $*"; }
+
+# --- Environnement Python / Spark / S3 (etapes 2 a 5) -------------------------------------------
+PY="${PYTHON:-python3}"
 DATA_DIR="${DATA_DIR:-$ROOT/data}"
 RESULTS_DIR="${RESULTS_DIR:-$ROOT/results}"
 mkdir -p "$RESULTS_DIR"
@@ -34,7 +39,7 @@ spark_env() {  # identifiants et endpoint S3 pour Spark (S3A)
 spark_run() {  # lance un script Spark : python3 si pyspark est importable, sinon spark-submit
   spark_env
   if "$PY" -c 'import pyspark' 2>/dev/null; then "$PY" "$@"
-  else "${SPARK_HOME:-/opt/spark}/bin/spark-submit" --master 'local[*]' "$@"; fi
+  else "${SPARK_HOME:-/opt/spark}/bin/spark-submit" --master 'local[4]' "$@"; fi
 }
 
 need_py() {  # dependances Python hors Spark : duckdb, pyarrow
@@ -42,5 +47,6 @@ need_py() {  # dependances Python hors Spark : duckdb, pyarrow
   "$PY" -m pip install --user -q duckdb pyarrow 2>/dev/null || uv pip install --system --break-system-packages -q duckdb pyarrow
 }
 
+# Mémoire du driver Spark (mode local[4]) : ajuster à la limite du pod
 export SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-3g}"
 export PYSPARK_SUBMIT_ARGS="${PYSPARK_SUBMIT_ARGS:---driver-memory $SPARK_DRIVER_MEMORY pyspark-shell}"
